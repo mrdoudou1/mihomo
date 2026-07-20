@@ -10,7 +10,7 @@ sudo cp -a . /opt/mihomo/
 cd /opt/mihomo
 cp .env.example .env
 # 仅在本机编辑 .env，填写订阅地址和密钥；不要提交 .env
-chmod +x generate-config.sh service.sh bin/linux-$(uname -m)/mihomo
+chmod +x generate-config.sh service.sh bin/linux-amd64/mihomo bin/linux-arm64/mihomo
 sudo ./service.sh install
 sudo ./service.sh start
 ```
@@ -21,13 +21,11 @@ sudo ./service.sh start
 
 ```text
 bin/
-├── x86_64/mihomo
-├── amd64/mihomo
-├── aarch64/mihomo
-└── arm64/mihomo
+├── linux-amd64/mihomo   # x86_64 / amd64
+└── linux-arm64/mihomo   # aarch64 / arm64
 ```
 
-四个架构目录分别提供对应的 Mihomo v1.19.29 ELF；x86_64 与 amd64 使用同一 amd64 构建，aarch64 与 arm64 使用同一 arm64 构建。
+仓库只保留两份实际不同的 Mihomo v1.19.29 ELF。启动脚本会自动把 `x86_64` / `amd64` 映射到 amd64 程序，把 `aarch64` / `arm64` 映射到 arm64 程序，避免重复占用空间。
 
 ## 配置与安全
 
