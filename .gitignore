@@ -1,0 +1,10 @@
+.env
+config/config.yaml
+config/sub_*.yaml
+config/cache.db
+config/*.metadb
+cache.db
+*.backup*
+*.bak
+*.old
+*.log

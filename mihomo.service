@@ -1,0 +1,25 @@
+[Unit]
+Description=Mihomo Proxy Service
+Documentation=https://github.com/MetaCubeX/mihomo
+After=network-online.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/mihomo
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStartPre=/opt/mihomo/generate-config.sh
+ExecStart=/opt/mihomo/mihomo -d /opt/mihomo/config
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=20s
+KillMode=control-group
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

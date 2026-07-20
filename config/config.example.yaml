@@ -1,0 +1,21 @@
+# 安全示例：不含订阅地址、控制器密钥或节点信息。
+# 实际配置请使用 .env.example 配置后运行 generate-config.sh 生成。
+port: 7890
+socks-port: 7891
+allow-lan: false
+bind-address: 127.0.0.1
+external-controller: 127.0.0.1:9090
+external-ui: ./ui
+secret: CHANGE_ME
+log-level: info
+mode: rule
+ipv6: false
+proxies: []
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - DIRECT
+      - REJECT
+rules:
+  - MATCH,PROXY
