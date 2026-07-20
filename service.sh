@@ -33,11 +33,9 @@ ensure_arch_binary() {
   local machine target current
   machine="$(uname -m)"
   case "$machine" in
-    x86_64) target="bin/x86_64/mihomo" ;;
-    amd64) target="bin/amd64/mihomo" ;;
-    aarch64) target="bin/aarch64/mihomo" ;;
-    arm64) target="bin/arm64/mihomo" ;;
-    *) echo "[mihomo-service] ERROR: 不支持的 CPU 架构: $machine（支持 x86_64/amd64/aarch64/arm64）" >&2; exit 1 ;;
+    x86_64|amd64) target="bin/linux-amd64/mihomo" ;;
+        aarch64|arm64) target="bin/linux-arm64/mihomo" ;;
+        *) echo "[mihomo-service] ERROR: 不支持的 CPU 架构: $machine（支持 x86_64/amd64/aarch64/arm64）" >&2; exit 1 ;;
   esac
   [ -x "$APP_DIR/$target" ] || { echo "[mihomo-service] ERROR: 找不到可执行文件: $APP_DIR/$target" >&2; exit 1; }
   if [ -e "$APP_DIR/mihomo" ] && [ ! -L "$APP_DIR/mihomo" ]; then
