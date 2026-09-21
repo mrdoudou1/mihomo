@@ -10,7 +10,7 @@ sudo git clone --depth 1 https://github.com/mrdoudou1/mihomo.git mihomo
 cd /opt/mihomo
 sudo cp .env.example .env
 # 仅在本机编辑 .env，填写订阅地址和密钥；不要提交 .env
-sudo chmod +x generate-config.sh service.sh bin/linux-amd64/mihomo bin/linux-arm64/mihomo
+sudo chmod +x generate-config.sh service.sh proxy.sh bin/linux-amd64/mihomo bin/linux-arm64/mihomo
 sudo ./service.sh install
 sudo ./service.sh start
 ```
@@ -55,6 +55,19 @@ source ./service.sh off    # 清除当前终端代理
 ```
 
 `on` 和 `off` 必须使用 `source`。直接执行 `./service.sh on` 只会影响子进程，无法让当前终端的 Git 使用代理，因此脚本会拒绝该用法并给出正确命令。`test` 显式指定代理，测试通过不代表当前终端已经设置了代理环境变量。
+
+## 局域网终端代理
+
+`proxy.sh` 是独立脚本，适合局域网内的其他机器使用。编辑文件顶部的 `PROXY_HOST`、`HTTP_PORT`、`SOCKS_PORT`、`PROXY_USERNAME` 和 `PROXY_PASSWORD` 后执行：
+
+```bash
+source ./proxy.sh on
+source ./proxy.sh off
+./proxy.sh proxy
+./proxy.sh test
+```
+
+`on` 和 `off` 同样必须使用 `source`，代理账号和密码不会显示在命令输出中。
 
 ## 卸载
 
