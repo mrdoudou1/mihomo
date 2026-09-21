@@ -4,6 +4,16 @@
 
 ## 安装
 
+在线一键安装（root 用户执行）：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/mrdoudou1/mihomo/main/install.sh)
+```
+
+若服务器需要代理才能访问 GitHub，先导出 `http_proxy`、`https_proxy`，再执行上述命令。
+
+离线安装或手动安装仍可使用以下方式，`service.sh` 会持续保留：
+
 ```bash
 cd /opt
 sudo git clone --depth 1 https://github.com/mrdoudou1/mihomo.git mihomo
@@ -62,7 +72,7 @@ source ./service.sh off    # 清除当前终端代理
 mihomo                     # 打开数字交互式管理菜单
 ```
 
-`mihomo` 菜单包含服务启停、状态、日志、开机自启、代理连通性测试、项目升级和服务卸载。升级会通过 `.env` 中配置的 Mihomo 代理执行 `git pull --ff-only origin main`；若本地有未提交修改，只有不与远端变更冲突时才会更新，脚本不会强制覆盖本地文件。菜单属于子进程，不能修改你当前终端的环境变量，因此终端代理仍需手动使用 `source ./service.sh on` 或 `source ./service.sh off`。
+`mihomo` 菜单按“服务管理 / 启动与代理 / 项目维护”分组，显示服务运行状态、开机自启、终端代理状态、HTTP/SOCKS 端口及控制面板本机/局域网地址。绿色表示服务运行或已启用，红色表示服务未运行或终端代理未开启。菜单的“更新订阅和配置”会清理订阅缓存并重启；“升级服务程序”会通过 `.env` 中配置的 Mihomo 代理执行 `git pull --ff-only origin main`。若本地有未提交修改，只有不与远端变更冲突时才会更新，脚本不会强制覆盖本地文件。菜单属于子进程，不能修改你当前终端的环境变量，因此终端代理仍需手动使用 `source ./service.sh on` 或 `source ./service.sh off`。
 
 `on` 和 `off` 必须使用 `source`。直接执行 `./service.sh on` 只会影响子进程，无法让当前终端的 Git 使用代理，因此脚本会拒绝该用法并给出正确命令。`test` 显式指定代理，测试通过不代表当前终端已经设置了代理环境变量。
 
@@ -81,15 +91,25 @@ source ./proxy.sh off
 
 ## 卸载
 
-以 root 用户执行：
+在 `mihomo` 菜单中选择 `12`，或以 root 用户直接执行：
 
 ```bash
 cd /opt/mihomo
-source ./service.sh uninstall
+./service.sh uninstall
 ```
 
-卸载命令会清除当前终端的六个代理变量（`http_proxy`、`https_proxy`、`all_proxy` 及其大写形式），停止 `mihomo.service`、关闭开机自启、删除 `/etc/systemd/system/mihomo.service`、删除本项目安装的 `/usr/local/bin/mihomo` 菜单命令并重载 systemd。项目目录、配置和订阅数据会保留。脚本最后只打印 `rm -rf /opt/mihomo`，由你手动执行以删除本体。
+卸载会停止 `mihomo.service`、关闭开机自启、删除 `/etc/systemd/system/mihomo.service`、重载 systemd，并删除 `/opt/mihomo` 中的程序、配置和订阅数据。`/usr/local/bin/mihomo` 全局入口会保留，因此之后仍可执行 `mihomo` 并选择安装；如需彻底删除入口，手动执行：
 
-也可以执行 `sudo ./service.sh uninstall`，但独立进程无法修改父终端环境，随后需要在当前终端执行脚本输出的 `unset` 命令。`stop`、`status`、`logs`、`disable` 和 `uninstall` 不会重新安装服务或创建二进制软链接。
+```bash
+rm -rf /usr/local/bin/mihomo
+```
+
+菜单属于子进程，无法清除它的父终端环境变量。**卸载前必须先退出菜单，并在当前终端执行**：
+
+```bash
+source /opt/mihomo/service.sh off
+```
+
+请在卸载前执行此命令，因为 `/opt/mihomo` 会随卸载删除，之后无法再通过原脚本关闭该终端的代理环境变量。菜单检测到当前终端代理仍开启时会拒绝继续卸载。
 
 上游项目：[MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo)，版本：`v1.19.29`。
