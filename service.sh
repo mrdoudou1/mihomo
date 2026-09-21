@@ -62,7 +62,8 @@ build_proxy_urls() {
 ensure_systemd_unit() {
   if [ -f "$SYSTEMD_UNIT" ]; then
     if grep -Fqx "WorkingDirectory=$APP_DIR" "$SYSTEMD_UNIT" \
-      && grep -Fqx "ExecStartPre=$APP_DIR/generate-config.sh" "$SYSTEMD_UNIT"; then
+      && grep -Fqx "ExecStartPre=$APP_DIR/generate-config.sh" "$SYSTEMD_UNIT" \
+      && grep -Fqx "ExecStart=$APP_DIR/mihomo -d $APP_DIR/config" "$SYSTEMD_UNIT"; then
       return 0
     fi
     if ! grep -Fq 'Description=Mihomo Proxy Service' "$SYSTEMD_UNIT"; then
@@ -76,6 +77,10 @@ ensure_systemd_unit() {
     echo "[mihomo-service] ERROR: 首次安装 mihomo.service 需要 root 权限" >&2
     echo "请使用 sudo $SCRIPT_PATH ${1:-status}" >&2
     return 1
+  fi
+
+  if [ -f "$SYSTEMD_UNIT" ]; then
+    cp -p "$SYSTEMD_UNIT" "$SYSTEMD_UNIT.backup.$(date +%s)" || return
   fi
 
   install -m 0644 /dev/stdin "$SYSTEMD_UNIT" <<'UNIT_EOF' || return
@@ -110,7 +115,8 @@ UNIT_EOF
 }
 
 migrate_legacy_config_path() {
-  if [ -f "$ENV_FILE" ] && grep -Eq '^[[:space:]]*CONFIG_DIR=.*\/opt\/mihomo1\/config' "$ENV_FILE"; then
+  if [ -f "$ENV_FILE" ] && grep -Eq "^[[:space:]]*CONFIG_DIR=[\"']?/opt/mihomo1/config[\"']?[[:space:]]*$" "$ENV_FILE"; then
+    cp -p "$ENV_FILE" "$ENV_FILE.backup.$(date +%s)" || return
     sed -i 's#^[[:space:]]*CONFIG_DIR=.*$#CONFIG_DIR="/opt/mihomo/config"#' "$ENV_FILE" || return
     log '已将 .env 中旧的 CONFIG_DIR=/opt/mihomo1/config 迁移为 /opt/mihomo/config'
   fi
@@ -122,7 +128,7 @@ ensure_command_entry() {
     return 1
   fi
 
-  if [ -e "$COMMAND_ENTRY" ] && ! grep -Fq '# Managed by /opt/mihomo/service.sh' "$COMMAND_ENTRY" 2>/dev/null; then
+  if [ -L "$COMMAND_ENTRY" ] || { [ -e "$COMMAND_ENTRY" ] && ! grep -Fqx '# Managed by /opt/mihomo/service.sh' "$COMMAND_ENTRY" 2>/dev/null; }; then
     echo "[mihomo-service] ERROR: $COMMAND_ENTRY 已存在且不是本项目生成的命令，为避免覆盖请先手动处理" >&2
     return 1
   fi
@@ -138,24 +144,34 @@ bootstrap_install() {
     echo "[mihomo] ERROR: 安装需要 root 权限，请使用 sudo mihomo" >&2
     return 1
   fi
-  if [ -e "\$APP_DIR" ]; then
+  if [ -e "\$APP_DIR" ] || [ -L "\$APP_DIR" ]; then
     echo "[mihomo] ERROR: \$APP_DIR 已存在但程序不完整，为避免覆盖请先检查该目录" >&2
     return 1
   fi
   echo '[mihomo] 正在从 GitHub 安装 Mihomo...'
-  git clone --depth 1 "\$REPO_URL" "\$APP_DIR" || {
+  local stage
+  stage="\$(mktemp -d /opt/.mihomo-install.XXXXXX)" || return
+  git clone --depth 1 "\$REPO_URL" "\$stage/project" || {
+    rm -rf -- "\$stage"
     echo '[mihomo] ERROR: 克隆失败。若服务器无法直连 GitHub，请先在当前终端配置 http_proxy/https_proxy 后重试。' >&2
     return 1
   }
-  cp "\$APP_DIR/.env.example" "\$APP_DIR/.env" || return
+  if [ -e "\$APP_DIR" ] || [ -L "\$APP_DIR" ]; then
+    rm -rf -- "\$stage"
+    return 1
+  fi
+  mv -T "\$stage/project" "\$APP_DIR" || return
+  rmdir "\$stage"
+  install -m 0600 "\$APP_DIR/.env.example" "\$APP_DIR/.env" || return
   chmod +x "\$APP_DIR/service.sh" "\$APP_DIR/generate-config.sh" "\$APP_DIR/proxy.sh" \
     "\$APP_DIR/bin/linux-amd64/mihomo" "\$APP_DIR/bin/linux-arm64/mihomo" || return
   "\$APP_DIR/service.sh" install || return
+  echo '请先编辑 /opt/mihomo/.env，填写订阅及认证信息，再启动服务。'
   exec "\$APP_DIR/service.sh" menu
 }
 
-if [ -x "\$APP_DIR/service.sh" ]; then
-  exec "\$APP_DIR/service.sh" menu "\$@"
+if [ -f "\$APP_DIR/service.sh" ]; then
+  exec bash "\$APP_DIR/service.sh" "\${@:-menu}"
 fi
 
 case "\${1:-}" in
@@ -180,6 +196,15 @@ EOF
 prepare_service_command() {
   case "${1:-}" in
     install|start|restart|reload|update|enable)
+      if [ "$1" = install ]; then
+        [ "$(id -u)" -eq 0 ] || { echo '安装需要 root 权限。' >&2; return 1; }
+        chmod +x "$APP_DIR/service.sh" "$APP_DIR/generate-config.sh" "$APP_DIR/proxy.sh" \
+          "$APP_DIR/bin/linux-amd64/mihomo" "$APP_DIR/bin/linux-arm64/mihomo" || return
+        if [ ! -f "$ENV_FILE" ]; then
+          install -m 0600 "$APP_DIR/.env.example" "$ENV_FILE" || return
+          log '已创建 .env，请填写订阅和认证信息后启动服务。'
+        fi
+      fi
       migrate_legacy_config_path || return
       ensure_arch_binary || return
       ensure_systemd_unit "$1" || return
@@ -265,7 +290,14 @@ show_runtime_summary() {
   fi
 }
 
+menu_command() {
+  bash "$SCRIPT_PATH" "$@" || {
+    echo -e "${RED}操作未成功，请检查错误信息或服务日志。${NC}"
+  }
+}
+
 show_menu() {
+  local choice confirm
   while true; do
     show_runtime_summary
     cat <<'EOF'
@@ -292,24 +324,24 @@ show_menu() {
 EOF
     read -r -p '请输入数字 [0-12]: ' choice || { echo; return 0; }
     case "$choice" in
-      1) "$SCRIPT_PATH" install ;;
-      2) "$SCRIPT_PATH" start ;;
-      3) "$SCRIPT_PATH" restart ;;
-      4) "$SCRIPT_PATH" stop ;;
-      5) "$SCRIPT_PATH" update ;;
-      6) "$SCRIPT_PATH" status ;;
-      7) "$SCRIPT_PATH" logs ;;
-      8) "$SCRIPT_PATH" enable ;;
-      9) "$SCRIPT_PATH" disable ;;
-      10) "$SCRIPT_PATH" test ;;
-      11) "$SCRIPT_PATH" upgrade ;;
+      1) menu_command install ;;
+      2) menu_command start ;;
+      3) menu_command restart ;;
+      4) menu_command stop ;;
+      5) menu_command update ;;
+      6) menu_command status ;;
+      7) menu_command logs ;;
+      8) menu_command enable ;;
+      9) menu_command disable ;;
+      10) menu_command test ;;
+      11) menu_command upgrade ;;
       12)
         echo -e "${RED}${BOLD}重要：卸载会删除 /opt/mihomo，包括 service.sh。${NC}"
         echo '如果当前终端之前执行过 source /opt/mihomo/service.sh on，请先：'
         echo -e "  ${YELLOW}1) 输入 0 退出本菜单${NC}"
         echo -e "  ${YELLOW}2) 在当前终端执行：source /opt/mihomo/service.sh off${NC}"
         echo -e "  ${YELLOW}3) 再执行 mihomo，并选择 12 卸载${NC}"
-        if [ -n "${http_proxy:-}" ] || [ -n "${HTTP_PROXY:-}" ]; then
+        if proxy_env_set; then
           echo -e "${RED}检测到当前终端代理仍开启；为避免卸载后无法通过原脚本关闭代理，已取消卸载。${NC}"
           continue
         fi
@@ -433,9 +465,19 @@ uninstall_service() {
     echo "[mihomo-service] ERROR: 卸载 systemd 服务需要 root 权限" >&2
     return 1
   fi
+  echo '卸载前请在当前终端执行：source /opt/mihomo/service.sh off'
+  if proxy_env_set; then
+    echo '检测到代理环境变量，已取消卸载。关闭代理后重试。' >&2
+    return 1
+  fi
+  [ "$APP_DIR" = /opt/mihomo ] && [ ! -L "$APP_DIR" ] \
+    && [ "$(readlink -f "$APP_DIR")" = /opt/mihomo ] || return 1
+  ensure_command_entry || return
   unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
-  systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
-  systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
+  if [ "$(systemctl show "$SERVICE_NAME" -p LoadState)" != LoadState=not-found ]; then
+    systemctl stop "$SERVICE_NAME" || return
+    systemctl disable "$SERVICE_NAME" || return
+  fi
   rm -f -- "$SYSTEMD_UNIT" || return
   systemctl daemon-reload || return
   systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
@@ -452,6 +494,10 @@ uninstall_service() {
   fi
   echo '全局入口 /usr/local/bin/mihomo 已保留，可再次执行 mihomo 重新安装。'
   echo '如需彻底删除全局入口，请手动执行：rm -rf /usr/local/bin/mihomo'
+}
+
+proxy_env_set() {
+  [ -n "${http_proxy:-}${https_proxy:-}${all_proxy:-}${HTTP_PROXY:-}${HTTPS_PROXY:-}${ALL_PROXY:-}" ]
 }
 
 main() {

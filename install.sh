@@ -9,10 +9,9 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-if [ -x "$APP_DIR/service.sh" ]; then
+if [ -f "$APP_DIR/service.sh" ]; then
   echo '[mihomo-install] 检测到已有安装，正在修复全局入口和 systemd 服务...'
-  chmod +x "$APP_DIR/service.sh" "$APP_DIR/generate-config.sh" "$APP_DIR/proxy.sh"
-  "$APP_DIR/service.sh" install
+  bash "$APP_DIR/service.sh" install
   echo '[mihomo-install] 完成。请执行 mihomo 打开管理菜单。'
   exit 0
 fi
@@ -22,8 +21,16 @@ if [ -e "$APP_DIR" ]; then
   exit 1
 fi
 
-git clone --depth 1 "$REPO_URL" "$APP_DIR"
-cp "$APP_DIR/.env.example" "$APP_DIR/.env"
+command -v git >/dev/null || { echo '请先安装 git。' >&2; exit 1; }
+stage="$(mktemp -d /opt/.mihomo-install.XXXXXX)"
+trap 'rm -rf -- "$stage"' EXIT
+git clone --depth 1 "$REPO_URL" "$stage/project"
+if [ -e "$APP_DIR" ] || [ -L "$APP_DIR" ]; then
+  echo '安装目录已被其他进程创建，停止安装。' >&2
+  exit 1
+fi
+mv -T "$stage/project" "$APP_DIR"
+install -m 0600 "$APP_DIR/.env.example" "$APP_DIR/.env"
 chmod +x "$APP_DIR/service.sh" "$APP_DIR/generate-config.sh" "$APP_DIR/proxy.sh" \
   "$APP_DIR/bin/linux-amd64/mihomo" "$APP_DIR/bin/linux-arm64/mihomo"
 "$APP_DIR/service.sh" install

@@ -7,12 +7,16 @@
 在线一键安装（root 用户执行）：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/mrdoudou1/mihomo/main/install.sh)
+curl -fSL https://raw.githubusercontent.com/mrdoudou1/mihomo/main/install.sh -o /tmp/mihomo-install.sh && sudo bash /tmp/mihomo-install.sh
 ```
 
 若服务器需要代理才能访问 GitHub，先导出 `http_proxy`、`https_proxy`，再执行上述命令。
 
-离线安装或手动安装仍可使用以下方式，`service.sh` 会持续保留：
+离线安装：将完整项目放到 `/opt/mihomo`，执行 `sudo bash /opt/mihomo/service.sh install`。脚本会修复执行权限，并在缺少 `.env` 时生成权限为 0600 的配置文件；填写订阅与认证信息后再启动服务。
+
+在线安装需要 Git 和访问 GitHub 的网络；安装器不会自动启动未配置的服务。已有安装会保留 `.env` 并修复服务和入口。新安装的下载在临时目录完成，失败不会留下残缺的 `/opt/mihomo`。
+
+手动安装也可使用以下方式，`service.sh` 会持续保留：
 
 ```bash
 cd /opt
@@ -35,7 +39,7 @@ mihomo
 
 服务器无法直连 GitHub、但已有 Mihomo 代理时，先在当前终端导出带认证的 `http_proxy`、`https_proxy`，再执行克隆；单独执行 `./service.sh on` 不会影响 Git。
 
-systemd 单元模板内嵌在 `service.sh` 中，项目不再需要单独的 `mihomo.service` 文件。`./service.sh install` 会在系统单元不存在时自动生成 `/etc/systemd/system/mihomo.service` 并执行 `systemctl daemon-reload`；已存在的系统单元会保留，不会被覆盖。默认安装目录仍为 `/opt/mihomo`。
+systemd 单元模板内嵌在 `service.sh` 中，项目不再需要单独的 `mihomo.service` 文件。`./service.sh install` 会生成 `/etc/systemd/system/mihomo.service` 并执行 `systemctl daemon-reload`。路径正确的已有单元会保留；本项目旧版单元的路径错误会在备份后修复，`.env` 中旧的 `/opt/mihomo1/config` 同样会备份后迁移。默认安装目录为 `/opt/mihomo`。
 
 ## 二进制目录
 
