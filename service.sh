@@ -282,7 +282,16 @@ EOF
       10) "$SCRIPT_PATH" test ;;
       11) "$SCRIPT_PATH" upgrade ;;
       12)
-        read -r -p '确认停止服务、删除 /opt/mihomo 全部文件？[y/N] ' confirm
+        echo -e "${RED}${BOLD}重要：卸载会删除 /opt/mihomo，包括 service.sh。${NC}"
+        echo '如果当前终端之前执行过 source /opt/mihomo/service.sh on，请先：'
+        echo -e "  ${YELLOW}1) 输入 0 退出本菜单${NC}"
+        echo -e "  ${YELLOW}2) 在当前终端执行：source /opt/mihomo/service.sh off${NC}"
+        echo -e "  ${YELLOW}3) 再执行 mihomo，并选择 12 卸载${NC}"
+        if [ -n "${http_proxy:-}" ] || [ -n "${HTTP_PROXY:-}" ]; then
+          echo -e "${RED}检测到当前终端代理仍开启；为避免卸载后无法通过原脚本关闭代理，已取消卸载。${NC}"
+          continue
+        fi
+        read -r -p '已确认终端代理关闭；继续删除服务和 /opt/mihomo 全部文件？[y/N] ' confirm
         case "$confirm" in
           y|Y|yes|YES) "$SCRIPT_PATH" uninstall && return 0 ;;
           *) echo '已取消卸载。' ;;
