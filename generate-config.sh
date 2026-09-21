@@ -1,7 +1,7 @@
 #!/bin/bash
 set -Eeuo pipefail
 
-APP_DIR="/opt/mihomo1"
+APP_DIR="/opt/mihomo"
 ENV_FILE="$APP_DIR/.env"
 
 [ -f "$ENV_FILE" ] || {
