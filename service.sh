@@ -228,7 +228,7 @@ Mihomo 统一管理脚本（systemd + 终端代理）
   $0 restart    生成配置、保留订阅缓存并重启
   $0 reload     重新加载配置（等同 restart）
   $0 update     清理订阅缓存、生成配置并重启
-  $0 upgrade    通过 Mihomo 代理从 GitHub 更新项目代码
+  $0 upgrade    通过 Mihomo 代理直接下载并在线更新项目
   $0 stop       停止服务
   $0 status     查看 systemd 服务状态
   $0 logs       查看最近日志
@@ -304,7 +304,7 @@ show_menu() {
 
 ========== Mihomo 全局管理菜单 ==========
 [服务管理]
-  1) 安装或修复服务
+  1) 安装服务
   2) 启动服务
   3) 重启服务
   4) 停止服务
@@ -316,8 +316,8 @@ show_menu() {
   9) 关闭开机自启
   10) 测试代理连通性
 [项目维护]
-  11) 升级服务程序（GitHub）
-  12) 卸载 Mihomo 服务及程序
+  11) 升级程序
+  12) 卸载 Mihomo
   0) 退出
 =====================================
 提示：终端代理请手动执行 source /opt/mihomo/service.sh on 或 off
@@ -430,34 +430,86 @@ proxy_test() {
   fi
 }
 
+is_preserved_entry() {
+  case "$1" in
+    .env|.env.backup.*|proxy.sh|config|.git) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+copy_program_entries() {
+  local source="$1" destination="$2" entry name
+  for entry in "$source"/* "$source"/.[!.]* "$source"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    name="${entry##*/}"
+    is_preserved_entry "$name" && continue
+    cp -a "$entry" "$destination/$name" || return
+  done
+}
+
+remove_program_entries() {
+  local entry name
+  for entry in "$APP_DIR"/* "$APP_DIR"/.[!.]* "$APP_DIR"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    name="${entry##*/}"
+    is_preserved_entry "$name" && continue
+    rm -rf -- "$entry" || return
+  done
+}
+
+restore_program_backup() {
+  local backup_dir="$1"
+  remove_program_entries || return
+  copy_program_entries "$backup_dir" "$APP_DIR"
+}
+
 upgrade_project() {
-  local before after
+  local stage archive source_dir backup_dir
   load_env || return
   build_proxy_urls
-  (cd "$APP_DIR" && git rev-parse --is-inside-work-tree >/dev/null 2>&1) || {
-    echo "[mihomo-service] ERROR: $APP_DIR 不是 Git 仓库，无法升级" >&2
+  command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1 || {
+    echo '[mihomo-service] ERROR: 在线更新需要 curl 和 tar 命令' >&2
     return 1
   }
-
-  before="$(cd "$APP_DIR" && git rev-parse --short HEAD)" || return
-  if ! (cd "$APP_DIR" && git diff --quiet); then
-    log '检测到本地未提交修改；仅当它们不与远端更新冲突时才会继续。'
-  fi
-  log '正在通过 Mihomo 代理从 GitHub 获取更新...'
-  if ! http_proxy="$HTTP_PROXY_URL" https_proxy="$HTTP_PROXY_URL" \
-       HTTP_PROXY="$HTTP_PROXY_URL" HTTPS_PROXY="$HTTP_PROXY_URL" \
-       bash -c 'cd "$1" && git pull --ff-only origin main' _ "$APP_DIR"; then
-    echo '[mihomo-service] ERROR: 更新失败；本地文件未被强制覆盖。' >&2
+  stage="$(mktemp -d /tmp/mihomo-upgrade.XXXXXX)" || return
+  archive="$stage/mihomo.tar.gz"
+  backup_dir="$stage/backup"
+  mkdir -p "$backup_dir" || { rm -rf -- "$stage"; return 1; }
+  log '正在通过 Mihomo 代理下载 GitHub 最新版本...'
+  if ! curl -fL --connect-timeout 10 --max-time 300 -x "$HTTP_PROXY_URL" \
+       -o "$archive" https://github.com/mrdoudou1/mihomo/archive/refs/heads/main.tar.gz; then
+    rm -rf -- "$stage"
+    echo '[mihomo-service] ERROR: 下载失败，现有程序未改动。' >&2
     return 1
   fi
-  after="$(cd "$APP_DIR" && git rev-parse --short HEAD)" || return
-  if [ "$before" = "$after" ]; then
-    log "项目已是最新版本: $after"
-  else
-    log "项目已升级: $before -> $after"
+  if ! tar -tzf "$archive" >/dev/null 2>&1 || ! tar -xzf "$archive" -C "$stage"; then
+    rm -rf -- "$stage"
+    echo '[mihomo-service] ERROR: 下载文件无效，现有程序未改动。' >&2
+    return 1
   fi
-  chmod +x "$APP_DIR/service.sh" || return
-  bash "$APP_DIR/service.sh" install
+  source_dir="$(find "$stage" -mindepth 1 -maxdepth 1 -type d -name 'mihomo-*' | head -n 1)"
+  if [ -z "$source_dir" ] || ! bash -n "$source_dir/service.sh"; then
+    rm -rf -- "$stage"
+    echo '[mihomo-service] ERROR: 新版本脚本校验失败，现有程序未改动。' >&2
+    return 1
+  fi
+  copy_program_entries "$APP_DIR" "$backup_dir" || { rm -rf -- "$stage"; return 1; }
+  if ! remove_program_entries || ! copy_program_entries "$source_dir" "$APP_DIR"; then
+    restore_program_backup "$backup_dir" || true
+    rm -rf -- "$stage"
+    echo '[mihomo-service] ERROR: 替换失败，已恢复旧程序。' >&2
+    return 1
+  fi
+  if ! bash "$APP_DIR/service.sh" install || ! bash "$APP_DIR/service.sh" restart; then
+    restore_program_backup "$backup_dir" || true
+    bash "$APP_DIR/service.sh" install >/dev/null 2>&1 || true
+    bash "$APP_DIR/service.sh" restart >/dev/null 2>&1 || true
+    rm -rf -- "$stage"
+    echo '[mihomo-service] ERROR: 新版本启动失败，已恢复旧程序。' >&2
+    return 1
+  fi
+  rm -rf -- "$stage"
+  log '在线更新完成；.env、proxy.sh、config 和 .git 已保留。'
 }
 
 uninstall_service() {

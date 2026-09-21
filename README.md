@@ -64,7 +64,7 @@ bin/
 ./service.sh start    # 生成配置、清理订阅缓存并启动
 ./service.sh restart  # 生成配置并重启，保留缓存
 ./service.sh update   # 清理缓存并重启
-./service.sh upgrade  # 通过 Mihomo 代理从 GitHub 更新项目代码
+./service.sh upgrade  # 通过 Mihomo 代理直接下载并在线更新
 ./service.sh status
 ./service.sh logs
 ./service.sh enable   # 开启开机自启，不立即启动
@@ -76,7 +76,7 @@ source ./service.sh off    # 清除当前终端代理
 mihomo                     # 打开数字交互式管理菜单
 ```
 
-`mihomo` 菜单按“服务管理 / 启动与代理 / 项目维护”分组，显示服务运行状态、开机自启、终端代理状态、HTTP/SOCKS 端口及控制面板本机/局域网地址。绿色表示服务运行或已启用，红色表示服务未运行或终端代理未开启。菜单的“更新订阅和配置”会清理订阅缓存并重启；“升级服务程序”会通过 `.env` 中配置的 Mihomo 代理执行 `git pull --ff-only origin main`。若本地有未提交修改，只有不与远端变更冲突时才会更新，脚本不会强制覆盖本地文件。菜单属于子进程，不能修改你当前终端的环境变量，因此终端代理仍需手动使用 `source ./service.sh on` 或 `source ./service.sh off`。
+`mihomo` 菜单按“服务管理 / 启动与代理 / 项目维护”分组，显示服务运行状态、开机自启、终端代理状态、HTTP/SOCKS 端口及控制面板本机/局域网地址。绿色表示服务运行或已启用，红色表示服务未运行或终端代理未开启。菜单的“更新订阅和配置”会清理订阅缓存并重启；“在线更新服务程序”会通过 `.env` 中配置的 Mihomo 代理下载 GitHub 最新压缩包，无需 Git 仓库。更新时会保留 `.env`、`.env.backup.*`、`proxy.sh`、`config/` 和 `.git/`，先备份现有程序文件；替换或新版本启动失败时会恢复旧程序。菜单属于子进程，不能修改你当前终端的环境变量，因此终端代理仍需手动使用 `source ./service.sh on` 或 `source ./service.sh off`。
 
 `on` 和 `off` 必须使用 `source`。直接执行 `./service.sh on` 只会影响子进程，无法让当前终端的 Git 使用代理，因此脚本会拒绝该用法并给出正确命令。`test` 显式指定代理，测试通过不代表当前终端已经设置了代理环境变量。
 
