@@ -434,23 +434,23 @@ upgrade_project() {
   local before after
   load_env || return
   build_proxy_urls
-  git -C "$APP_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+  (cd "$APP_DIR" && git rev-parse --is-inside-work-tree >/dev/null 2>&1) || {
     echo "[mihomo-service] ERROR: $APP_DIR 不是 Git 仓库，无法升级" >&2
     return 1
   }
 
-  before="$(git -C "$APP_DIR" rev-parse --short HEAD)" || return
-  if ! git -C "$APP_DIR" diff --quiet; then
+  before="$(cd "$APP_DIR" && git rev-parse --short HEAD)" || return
+  if ! (cd "$APP_DIR" && git diff --quiet); then
     log '检测到本地未提交修改；仅当它们不与远端更新冲突时才会继续。'
   fi
   log '正在通过 Mihomo 代理从 GitHub 获取更新...'
   if ! http_proxy="$HTTP_PROXY_URL" https_proxy="$HTTP_PROXY_URL" \
        HTTP_PROXY="$HTTP_PROXY_URL" HTTPS_PROXY="$HTTP_PROXY_URL" \
-       git -C "$APP_DIR" pull --ff-only origin main; then
+       bash -c 'cd "$1" && git pull --ff-only origin main' _ "$APP_DIR"; then
     echo '[mihomo-service] ERROR: 更新失败；本地文件未被强制覆盖。' >&2
     return 1
   fi
-  after="$(git -C "$APP_DIR" rev-parse --short HEAD)" || return
+  after="$(cd "$APP_DIR" && git rev-parse --short HEAD)" || return
   if [ "$before" = "$after" ]; then
     log "项目已是最新版本: $after"
   else
