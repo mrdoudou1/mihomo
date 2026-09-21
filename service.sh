@@ -8,6 +8,7 @@ SCRIPT_PATH="${BASH_SOURCE[0]}"
 ENV_FILE="$APP_DIR/.env"
 SERVICE_NAME="mihomo.service"
 SYSTEMD_UNIT="/etc/systemd/system/$SERVICE_NAME"
+COMMAND_ENTRY="/usr/local/bin/mihomo"
 DEFAULT_CONFIG_DIR="$APP_DIR/config"
 CONFIG_DIR="$DEFAULT_CONFIG_DIR"
 PROXY_HOST="127.0.0.1"
@@ -96,11 +97,33 @@ UNIT_EOF
   log "检测到 systemd 服务文件不存在，已自动安装: $SYSTEMD_UNIT"
 }
 
+ensure_command_entry() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "[mihomo-service] ERROR: 安装 mihomo 全局命令需要 root 权限" >&2
+    return 1
+  fi
+
+  if [ -e "$COMMAND_ENTRY" ] && ! grep -Fq '# Managed by /opt/mihomo/service.sh' "$COMMAND_ENTRY" 2>/dev/null; then
+    echo "[mihomo-service] ERROR: $COMMAND_ENTRY 已存在且不是本项目生成的命令，为避免覆盖请先手动处理" >&2
+    return 1
+  fi
+
+  install -m 0755 /dev/stdin "$COMMAND_ENTRY" <<EOF || return
+#!/bin/bash
+# Managed by /opt/mihomo/service.sh
+exec /opt/mihomo/service.sh menu "\$@"
+EOF
+  log "已安装全局菜单命令: mihomo"
+}
+
 prepare_service_command() {
   case "${1:-}" in
     install|start|restart|reload|update|enable)
       ensure_arch_binary || return
       ensure_systemd_unit "$1" || return
+      if [ "$1" = install ]; then
+        ensure_command_entry || return
+      fi
       ;;
   esac
 }
@@ -125,6 +148,7 @@ Mihomo 统一管理脚本（systemd + 终端代理）
   $0 disable    关闭开机自启（不停止当前服务）
   $0 uninstall  停止服务、关闭自启并删除系统单元，保留项目目录
   source $SCRIPT_PATH uninstall  卸载服务并清除当前终端代理（root 执行）
+  mihomo        打开数字交互式管理菜单（需先执行 install）
 
 终端代理管理:
   source $0 on       开启当前终端代理
@@ -135,6 +159,47 @@ Mihomo 统一管理脚本（systemd + 终端代理）
 提示：on/off 必须使用 source，才能修改当前终端的环境变量。
       test 显式连接代理，不代表当前终端或 Git 已经启用代理。
 EOF
+}
+
+show_menu() {
+  while true; do
+    cat <<'EOF'
+
+========== Mihomo 管理菜单 ==========
+  1) 启动服务
+  2) 停止服务
+  3) 重启服务
+  4) 查看服务状态
+  5) 查看最近日志
+  6) 开启开机自启
+  7) 关闭开机自启
+  8) 测试代理连通性
+  9) 卸载 systemd 服务
+  0) 退出
+=====================================
+提示：终端代理请手动执行 source /opt/mihomo/service.sh on 或 off
+EOF
+    read -r -p '请输入数字 [0-9]: ' choice || { echo; return 0; }
+    case "$choice" in
+      1) "$SCRIPT_PATH" start ;;
+      2) "$SCRIPT_PATH" stop ;;
+      3) "$SCRIPT_PATH" restart ;;
+      4) "$SCRIPT_PATH" status ;;
+      5) "$SCRIPT_PATH" logs ;;
+      6) "$SCRIPT_PATH" enable ;;
+      7) "$SCRIPT_PATH" disable ;;
+      8) "$SCRIPT_PATH" test ;;
+      9)
+        read -r -p '确认卸载 systemd 服务和 mihomo 菜单命令？[y/N] ' confirm
+        case "$confirm" in
+          y|Y|yes|YES) "$SCRIPT_PATH" uninstall && return 0 ;;
+          *) echo '已取消卸载。' ;;
+        esac
+        ;;
+      0) return 0 ;;
+      *) echo '❌ 无效选项，请输入 0-9。' ;;
+    esac
+  done
 }
 
 generate_config() {
@@ -223,6 +288,10 @@ uninstall_service() {
     systemctl disable "$SERVICE_NAME" || return
   fi
   rm -f -- "$SYSTEMD_UNIT" || return
+  if [ -e "$COMMAND_ENTRY" ] && grep -Fq '# Managed by /opt/mihomo/service.sh' "$COMMAND_ENTRY" 2>/dev/null; then
+    rm -f -- "$COMMAND_ENTRY" || return
+    log "已删除全局菜单命令: mihomo"
+  fi
   systemctl daemon-reload || return
   systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
   log "系统服务已卸载；项目目录、配置和订阅数据已保留。"
@@ -294,6 +363,9 @@ case "${1:-}" in
     ;;
   test|proxy-test)
     proxy_test
+    ;;
+  menu)
+    show_menu
     ;;
   help|-h|--help|"")
     show_help
