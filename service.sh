@@ -476,7 +476,7 @@ upgrade_project() {
   backup_dir="$stage/backup"
   mkdir -p "$backup_dir" || { rm -rf -- "$stage"; return 1; }
   log '正在通过 Mihomo 代理下载 GitHub 最新版本...'
-  if ! curl -fL --connect-timeout 10 --max-time 300 -x "$HTTP_PROXY_URL" \
+  if ! curl -fsSL --connect-timeout 10 --max-time 300 -x "$HTTP_PROXY_URL" \
        -o "$archive" https://github.com/mrdoudou1/mihomo/archive/refs/heads/main.tar.gz; then
     rm -rf -- "$stage"
     echo '[mihomo-service] ERROR: 下载失败，现有程序未改动。' >&2
