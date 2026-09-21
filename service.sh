@@ -61,7 +61,15 @@ build_proxy_urls() {
 
 ensure_systemd_unit() {
   if [ -f "$SYSTEMD_UNIT" ]; then
-    return 0
+    if grep -Fqx "WorkingDirectory=$APP_DIR" "$SYSTEMD_UNIT" \
+      && grep -Fqx "ExecStartPre=$APP_DIR/generate-config.sh" "$SYSTEMD_UNIT"; then
+      return 0
+    fi
+    if ! grep -Fq 'Description=Mihomo Proxy Service' "$SYSTEMD_UNIT"; then
+      echo "[mihomo-service] ERROR: $SYSTEMD_UNIT 已存在且不是本项目管理的服务，为避免覆盖请先手动检查" >&2
+      return 1
+    fi
+    log "检测到旧版 Mihomo 服务路径，正在迁移为 $APP_DIR"
   fi
 
   if [ "$(id -u)" -ne 0 ]; then
@@ -98,7 +106,14 @@ StandardError=journal
 WantedBy=multi-user.target
 UNIT_EOF
   systemctl daemon-reload || return
-  log "检测到 systemd 服务文件不存在，已自动安装: $SYSTEMD_UNIT"
+  log "systemd 服务文件已安装或更新: $SYSTEMD_UNIT"
+}
+
+migrate_legacy_config_path() {
+  if [ -f "$ENV_FILE" ] && grep -Eq '^[[:space:]]*CONFIG_DIR=.*\/opt\/mihomo1\/config' "$ENV_FILE"; then
+    sed -i 's#^[[:space:]]*CONFIG_DIR=.*$#CONFIG_DIR="/opt/mihomo/config"#' "$ENV_FILE" || return
+    log '已将 .env 中旧的 CONFIG_DIR=/opt/mihomo1/config 迁移为 /opt/mihomo/config'
+  fi
 }
 
 ensure_command_entry() {
@@ -165,6 +180,7 @@ EOF
 prepare_service_command() {
   case "${1:-}" in
     install|start|restart|reload|update|enable)
+      migrate_legacy_config_path || return
       ensure_arch_binary || return
       ensure_systemd_unit "$1" || return
       if [ "$1" = install ]; then
