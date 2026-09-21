@@ -15,6 +15,12 @@ sudo ./service.sh install
 sudo ./service.sh start
 ```
 
+安装完成后，在任意目录输入以下命令即可打开数字交互式管理菜单：
+
+```bash
+mihomo
+```
+
 仓库为公开仓库，不需要 GitHub Token。`service.sh install` 会安全地根据 `uname -m` 创建 `/opt/mihomo/mihomo` 软链接并安装 systemd 服务：`x86_64` 和 `amd64` 使用 `bin/linux-amd64/mihomo`，`aarch64` 和 `arm64` 使用 `bin/linux-arm64/mihomo`；未知架构会直接报错。若 `/opt/mihomo/mihomo` 已是普通文件，脚本不会覆盖它。首次启动会由脚本生成 `config/config.yaml` 并拉取订阅。
 
 服务器无法直连 GitHub、但已有 Mihomo 代理时，先在当前终端导出带认证的 `http_proxy`、`https_proxy`，再执行克隆；单独执行 `./service.sh on` 不会影响 Git。
@@ -52,7 +58,10 @@ source ./service.sh on     # 开启当前终端代理
 source ./service.sh off    # 清除当前终端代理
 ./service.sh proxy         # 查看代理环境变量
 ./service.sh test          # 显式通过代理测试连通性
+mihomo                     # 打开数字交互式管理菜单
 ```
+
+`mihomo` 菜单包含服务启停、状态、日志、开机自启、代理连通性测试和服务卸载。菜单属于子进程，不能修改你当前终端的环境变量，因此终端代理仍需手动使用 `source ./service.sh on` 或 `source ./service.sh off`。
 
 `on` 和 `off` 必须使用 `source`。直接执行 `./service.sh on` 只会影响子进程，无法让当前终端的 Git 使用代理，因此脚本会拒绝该用法并给出正确命令。`test` 显式指定代理，测试通过不代表当前终端已经设置了代理环境变量。
 
@@ -78,7 +87,7 @@ cd /opt/mihomo
 source ./service.sh uninstall
 ```
 
-卸载命令会清除当前终端的六个代理变量（`http_proxy`、`https_proxy`、`all_proxy` 及其大写形式），停止 `mihomo.service`、关闭开机自启、删除 `/etc/systemd/system/mihomo.service` 并重载 systemd。项目目录、配置和订阅数据会保留。脚本最后只打印 `rm -rf /opt/mihomo`，由你手动执行以删除本体。
+卸载命令会清除当前终端的六个代理变量（`http_proxy`、`https_proxy`、`all_proxy` 及其大写形式），停止 `mihomo.service`、关闭开机自启、删除 `/etc/systemd/system/mihomo.service`、删除本项目安装的 `/usr/local/bin/mihomo` 菜单命令并重载 systemd。项目目录、配置和订阅数据会保留。脚本最后只打印 `rm -rf /opt/mihomo`，由你手动执行以删除本体。
 
 也可以执行 `sudo ./service.sh uninstall`，但独立进程无法修改父终端环境，随后需要在当前终端执行脚本输出的 `unset` 命令。`stop`、`status`、`logs`、`disable` 和 `uninstall` 不会重新安装服务或创建二进制软链接。
 
