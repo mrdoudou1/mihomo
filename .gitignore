@@ -1,4 +1,5 @@
 .env
+/mihomo
 config/config.yaml
 config/sub_*.yaml
 config/cache.db
