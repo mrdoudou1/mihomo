@@ -141,6 +141,7 @@ Mihomo 统一管理脚本（systemd + 终端代理）
   $0 restart    生成配置、保留订阅缓存并重启
   $0 reload     重新加载配置（等同 restart）
   $0 update     清理订阅缓存、生成配置并重启
+  $0 upgrade    通过 Mihomo 代理从 GitHub 更新项目代码
   $0 stop       停止服务
   $0 status     查看 systemd 服务状态
   $0 logs       查看最近日志
@@ -174,12 +175,13 @@ show_menu() {
   6) 开启开机自启
   7) 关闭开机自启
   8) 测试代理连通性
-  9) 卸载 systemd 服务
+  9) 升级项目代码
+  10) 卸载 systemd 服务
   0) 退出
 =====================================
 提示：终端代理请手动执行 source /opt/mihomo/service.sh on 或 off
 EOF
-    read -r -p '请输入数字 [0-9]: ' choice || { echo; return 0; }
+    read -r -p '请输入数字 [0-10]: ' choice || { echo; return 0; }
     case "$choice" in
       1) "$SCRIPT_PATH" start ;;
       2) "$SCRIPT_PATH" stop ;;
@@ -189,7 +191,8 @@ EOF
       6) "$SCRIPT_PATH" enable ;;
       7) "$SCRIPT_PATH" disable ;;
       8) "$SCRIPT_PATH" test ;;
-      9)
+      9) "$SCRIPT_PATH" upgrade ;;
+      10)
         read -r -p '确认卸载 systemd 服务和 mihomo 菜单命令？[y/N] ' confirm
         case "$confirm" in
           y|Y|yes|YES) "$SCRIPT_PATH" uninstall && return 0 ;;
@@ -197,7 +200,7 @@ EOF
         esac
         ;;
       0) return 0 ;;
-      *) echo '❌ 无效选项，请输入 0-9。' ;;
+      *) echo '❌ 无效选项，请输入 0-10。' ;;
     esac
   done
 }
@@ -275,6 +278,36 @@ proxy_test() {
   fi
 }
 
+upgrade_project() {
+  local before after
+  load_env || return
+  build_proxy_urls
+  git -C "$APP_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "[mihomo-service] ERROR: $APP_DIR 不是 Git 仓库，无法升级" >&2
+    return 1
+  }
+
+  before="$(git -C "$APP_DIR" rev-parse --short HEAD)" || return
+  if ! git -C "$APP_DIR" diff --quiet; then
+    log '检测到本地未提交修改；仅当它们不与远端更新冲突时才会继续。'
+  fi
+  log '正在通过 Mihomo 代理从 GitHub 获取更新...'
+  if ! http_proxy="$HTTP_PROXY_URL" https_proxy="$HTTP_PROXY_URL" \
+       HTTP_PROXY="$HTTP_PROXY_URL" HTTPS_PROXY="$HTTP_PROXY_URL" \
+       git -C "$APP_DIR" pull --ff-only origin main; then
+    echo '[mihomo-service] ERROR: 更新失败；本地文件未被强制覆盖。' >&2
+    return 1
+  fi
+  after="$(git -C "$APP_DIR" rev-parse --short HEAD)" || return
+  if [ "$before" = "$after" ]; then
+    log "项目已是最新版本: $after"
+  else
+    log "项目已升级: $before -> $after"
+  fi
+  chmod +x "$APP_DIR/service.sh" || return
+  bash "$APP_DIR/service.sh" install
+}
+
 uninstall_service() {
   local load_state
   if [ "$(id -u)" -ne 0 ]; then
@@ -333,6 +366,9 @@ case "${1:-}" in
     find "$CONFIG_DIR" -maxdepth 1 -type f -name 'sub_*.yaml' -delete
     log "已清理订阅缓存，交由 systemd 重启并重新拉取订阅"
     systemctl restart "$SERVICE_NAME"
+    ;;
+  upgrade)
+    upgrade_project
     ;;
   stop)
     systemctl stop "$SERVICE_NAME"
