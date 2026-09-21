@@ -290,10 +290,24 @@ show_runtime_summary() {
   fi
 }
 
+pause_menu() {
+  echo
+  read -r -p '按 Enter 键返回主菜单...' _ || true
+}
+
 menu_command() {
-  bash "$SCRIPT_PATH" "$@" || {
-    echo -e "${RED}操作未成功，请检查错误信息或服务日志。${NC}"
-  }
+  local label="$1"
+  shift
+  echo
+  echo -e "${CYAN}${BOLD}--- $label ---${NC}"
+  if bash "$SCRIPT_PATH" "$@"; then
+    echo
+    echo -e "${GREEN}✅ $label 已执行完成${NC}"
+  else
+    echo
+    echo -e "${RED}❌ $label 执行失败，请检查上面的错误信息或查看服务日志。${NC}"
+  fi
+  pause_menu
 }
 
 show_menu() {
@@ -324,17 +338,17 @@ show_menu() {
 EOF
     read -r -p '请输入数字 [0-12]: ' choice || { echo; return 0; }
     case "$choice" in
-      1) menu_command install ;;
-      2) menu_command start ;;
-      3) menu_command restart ;;
-      4) menu_command stop ;;
-      5) menu_command update ;;
-      6) menu_command status ;;
-      7) menu_command logs ;;
-      8) menu_command enable ;;
-      9) menu_command disable ;;
-      10) menu_command test ;;
-      11) menu_command upgrade ;;
+      1) menu_command '安装服务' install ;;
+      2) menu_command '启动服务' start ;;
+      3) menu_command '重启服务' restart ;;
+      4) menu_command '停止服务' stop ;;
+      5) menu_command '更新订阅和配置' update ;;
+      6) menu_command '查看服务状态' status ;;
+      7) menu_command '查看最近日志' logs ;;
+      8) menu_command '开启开机自启' enable ;;
+      9) menu_command '关闭开机自启' disable ;;
+      10) menu_command '测试代理连通性' test ;;
+      11) menu_command '升级程序' upgrade ;;
       12)
         echo -e "${RED}${BOLD}重要：卸载会删除 /opt/mihomo，包括 service.sh。${NC}"
         echo '如果当前终端之前执行过 source /opt/mihomo/service.sh on，请先：'
@@ -343,16 +357,17 @@ EOF
         echo -e "  ${YELLOW}3) 再执行 mihomo，并选择 12 卸载${NC}"
         if proxy_env_set; then
           echo -e "${RED}检测到当前终端代理仍开启；为避免卸载后无法通过原脚本关闭代理，已取消卸载。${NC}"
+          pause_menu
           continue
         fi
         read -r -p '已确认终端代理关闭；继续删除服务和 /opt/mihomo 全部文件？[y/N] ' confirm
         case "$confirm" in
           y|Y|yes|YES) "$SCRIPT_PATH" uninstall && return 0 ;;
-          *) echo '已取消卸载。' ;;
+          *) echo '已取消卸载。'; pause_menu ;;
         esac
         ;;
-      0) return 0 ;;
-      *) echo '❌ 无效选项，请输入 0-12。' ;;
+      0) echo '已退出 Mihomo 管理菜单。'; return 0 ;;
+      *) echo '❌ 无效选项，请输入 0-12。'; pause_menu ;;
     esac
   done
 }
