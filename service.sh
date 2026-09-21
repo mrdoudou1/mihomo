@@ -15,6 +15,10 @@ PROXY_HOST="127.0.0.1"
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
 NC='\033[0m'
 
 load_env() {
@@ -111,7 +115,49 @@ ensure_command_entry() {
   install -m 0755 /dev/stdin "$COMMAND_ENTRY" <<EOF || return
 #!/bin/bash
 # Managed by /opt/mihomo/service.sh
-exec /opt/mihomo/service.sh menu "\$@"
+APP_DIR="/opt/mihomo"
+REPO_URL="https://github.com/mrdoudou1/mihomo.git"
+
+bootstrap_install() {
+  if [ "\$(id -u)" -ne 0 ]; then
+    echo "[mihomo] ERROR: 安装需要 root 权限，请使用 sudo mihomo" >&2
+    return 1
+  fi
+  if [ -e "\$APP_DIR" ]; then
+    echo "[mihomo] ERROR: \$APP_DIR 已存在但程序不完整，为避免覆盖请先检查该目录" >&2
+    return 1
+  fi
+  echo '[mihomo] 正在从 GitHub 安装 Mihomo...'
+  git clone --depth 1 "\$REPO_URL" "\$APP_DIR" || {
+    echo '[mihomo] ERROR: 克隆失败。若服务器无法直连 GitHub，请先在当前终端配置 http_proxy/https_proxy 后重试。' >&2
+    return 1
+  }
+  cp "\$APP_DIR/.env.example" "\$APP_DIR/.env" || return
+  chmod +x "\$APP_DIR/service.sh" "\$APP_DIR/generate-config.sh" "\$APP_DIR/proxy.sh" \
+    "\$APP_DIR/bin/linux-amd64/mihomo" "\$APP_DIR/bin/linux-arm64/mihomo" || return
+  "\$APP_DIR/service.sh" install || return
+  exec "\$APP_DIR/service.sh" menu
+}
+
+if [ -x "\$APP_DIR/service.sh" ]; then
+  exec "\$APP_DIR/service.sh" menu "\$@"
+fi
+
+case "\${1:-}" in
+  install) bootstrap_install ;;
+  '' )
+    echo 'Mihomo 尚未安装。'
+    echo '  1) 安装 Mihomo'
+    echo '  0) 退出'
+    read -r -p '请输入数字 [0-1]: ' choice || exit 0
+    case "\$choice" in
+      1) bootstrap_install ;;
+      0) exit 0 ;;
+      *) echo '❌ 无效选项。' >&2; exit 1 ;;
+    esac
+    ;;
+  *) echo "[mihomo] 程序尚未安装。执行 mihomo 后选择 1 安装。" >&2; exit 1 ;;
+esac
 EOF
   log "已安装全局菜单命令: mihomo"
 }
@@ -147,9 +193,8 @@ Mihomo 统一管理脚本（systemd + 终端代理）
   $0 logs       查看最近日志
   $0 enable     开启开机自启（不立即启动）
   $0 disable    关闭开机自启（不停止当前服务）
-  $0 uninstall  停止服务、关闭自启并删除系统单元，保留项目目录
-  source $SCRIPT_PATH uninstall  卸载服务并清除当前终端代理（root 执行）
-  mihomo        打开数字交互式管理菜单（需先执行 install）
+  $0 uninstall  停止服务、关闭自启、删除系统单元和 /opt/mihomo
+  mihomo        打开全局数字管理菜单
 
 终端代理管理:
   source $0 on       开启当前终端代理
@@ -162,45 +207,89 @@ Mihomo 统一管理脚本（systemd + 终端代理）
 EOF
 }
 
+show_runtime_summary() {
+  local service_state boot_state proxy_state controller controller_host controller_port local_controller lan_ip
+  load_env >/dev/null 2>&1 || true
+  service_state="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
+  boot_state="$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
+  [ -n "$service_state" ] || service_state='未安装'
+  [ -n "$boot_state" ] || boot_state='未启用'
+  if [ -n "${http_proxy:-}" ] || [ -n "${HTTP_PROXY:-}" ]; then proxy_state='已开启'; else proxy_state='未开启'; fi
+  controller='127.0.0.1:9090'
+  if [ -f "$CONFIG_DIR/config.yaml" ]; then
+    controller="$(sed -nE 's/^[[:space:]]*external-controller:[[:space:]]*([^[:space:]#]+).*/\1/p' "$CONFIG_DIR/config.yaml" | head -n 1 | tr -d '\"')"
+    [ -n "$controller" ] || controller='127.0.0.1:9090'
+  fi
+  controller_host="${controller%:*}"
+  controller_port="${controller##*:}"
+  local_controller="$controller"
+  case "$controller_host" in
+    0.0.0.0|::|\[::\]) local_controller="127.0.0.1:$controller_port" ;;
+  esac
+  lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  printf '\n%b%s%b\n' "$BOLD$CYAN" '当前状态' "$NC"
+  case "$service_state" in
+    active) printf '  服务状态: %b%s%b' "$GREEN$BOLD" '● 运行中' "$NC" ;;
+    inactive|failed|deactivating) printf '  服务状态: %b%s%b' "$RED$BOLD" "● $service_state" "$NC" ;;
+    *) printf '  服务状态: %b%s%b' "$YELLOW$BOLD" "● $service_state" "$NC" ;;
+  esac
+  case "$boot_state" in
+    enabled|enabled-runtime) printf '    开机自启: %b%s%b' "$GREEN" '已开启' "$NC" ;;
+    *) printf '    开机自启: %b%s%b' "$YELLOW" "$boot_state" "$NC" ;;
+  esac
+  if [ "$proxy_state" = '已开启' ]; then
+    printf '    终端代理: %b%s%b\n' "$GREEN" "$proxy_state" "$NC"
+  else
+    printf '    终端代理: %b%s%b\n' "$RED" "$proxy_state" "$NC"
+  fi
+  printf '  %bHTTP/SOCKS:%b %s / %s\n' "$BLUE" "$NC" "${HTTP_PORT:-7890}" "${SOCKS_PORT:-7891}"
+  printf '  %b控制面板:%b   http://%s/ui\n' "$MAGENTA" "$NC" "$local_controller"
+  if [ -n "$lan_ip" ]; then
+    printf '  %b局域网访问:%b http://%s:%s/ui\n' "$MAGENTA" "$NC" "$lan_ip" "$controller_port"
+  fi
+}
+
 show_menu() {
   while true; do
+    show_runtime_summary
     cat <<'EOF'
 
-========== Mihomo 管理菜单 ==========
-  1) 启动服务
-  2) 停止服务
-  3) 重启服务
-  4) 查看服务状态
-  5) 查看最近日志
-  6) 开启开机自启
-  7) 关闭开机自启
-  8) 测试代理连通性
-  9) 升级项目代码
-  10) 卸载 systemd 服务
+========== Mihomo 全局管理菜单 ==========
+[服务管理]
+  1) 安装或修复服务       2) 启动服务             3) 重启服务
+  4) 停止服务             5) 更新订阅和配置       6) 查看服务状态
+  7) 查看最近日志
+[启动与代理]
+  8) 开启开机自启         9) 关闭开机自启         10) 测试代理连通性
+[项目维护]
+  11) 升级服务程序（GitHub）
+  12) 卸载 Mihomo 服务及程序
   0) 退出
 =====================================
 提示：终端代理请手动执行 source /opt/mihomo/service.sh on 或 off
 EOF
-    read -r -p '请输入数字 [0-10]: ' choice || { echo; return 0; }
+    read -r -p '请输入数字 [0-12]: ' choice || { echo; return 0; }
     case "$choice" in
-      1) "$SCRIPT_PATH" start ;;
-      2) "$SCRIPT_PATH" stop ;;
+      1) "$SCRIPT_PATH" install ;;
+      2) "$SCRIPT_PATH" start ;;
       3) "$SCRIPT_PATH" restart ;;
-      4) "$SCRIPT_PATH" status ;;
-      5) "$SCRIPT_PATH" logs ;;
-      6) "$SCRIPT_PATH" enable ;;
-      7) "$SCRIPT_PATH" disable ;;
-      8) "$SCRIPT_PATH" test ;;
-      9) "$SCRIPT_PATH" upgrade ;;
-      10)
-        read -r -p '确认卸载 systemd 服务和 mihomo 菜单命令？[y/N] ' confirm
+      4) "$SCRIPT_PATH" stop ;;
+      5) "$SCRIPT_PATH" update ;;
+      6) "$SCRIPT_PATH" status ;;
+      7) "$SCRIPT_PATH" logs ;;
+      8) "$SCRIPT_PATH" enable ;;
+      9) "$SCRIPT_PATH" disable ;;
+      10) "$SCRIPT_PATH" test ;;
+      11) "$SCRIPT_PATH" upgrade ;;
+      12)
+        read -r -p '确认停止服务、删除 /opt/mihomo 全部文件？[y/N] ' confirm
         case "$confirm" in
           y|Y|yes|YES) "$SCRIPT_PATH" uninstall && return 0 ;;
           *) echo '已取消卸载。' ;;
         esac
         ;;
       0) return 0 ;;
-      *) echo '❌ 无效选项，请输入 0-10。' ;;
+      *) echo '❌ 无效选项，请输入 0-12。' ;;
     esac
   done
 }
@@ -309,33 +398,29 @@ upgrade_project() {
 }
 
 uninstall_service() {
-  local load_state
   if [ "$(id -u)" -ne 0 ]; then
     echo "[mihomo-service] ERROR: 卸载 systemd 服务需要 root 权限" >&2
     return 1
   fi
   unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
-  load_state="$(systemctl show "$SERVICE_NAME" -p LoadState)" || return
-  if [ -e "$SYSTEMD_UNIT" ] || [ -L "$SYSTEMD_UNIT" ] || [ "$load_state" != 'LoadState=not-found' ]; then
-    systemctl stop "$SERVICE_NAME" || return
-    systemctl disable "$SERVICE_NAME" || return
-  fi
+  systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+  systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
   rm -f -- "$SYSTEMD_UNIT" || return
-  if [ -e "$COMMAND_ENTRY" ] && grep -Fq '# Managed by /opt/mihomo/service.sh' "$COMMAND_ENTRY" 2>/dev/null; then
-    rm -f -- "$COMMAND_ENTRY" || return
-    log "已删除全局菜单命令: mihomo"
-  fi
   systemctl daemon-reload || return
   systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
-  log "系统服务已卸载；项目目录、配置和订阅数据已保留。"
+  case "$APP_DIR" in
+    /opt/mihomo) rm -rf -- "$APP_DIR" || return ;;
+    *) echo "[mihomo-service] ERROR: 拒绝删除非预期目录: $APP_DIR" >&2; return 1 ;;
+  esac
+  log "Mihomo 服务、开机自启、配置和 /opt/mihomo 已删除。"
   if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
     log "当前终端的代理环境变量已清除。"
   else
     echo "独立执行脚本不能清除父终端环境变量，请在当前终端执行："
     echo 'unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY'
   fi
-  echo "如需删除程序本体和配置，请手动执行以下命令："
-  echo 'rm -rf /opt/mihomo'
+  echo '全局入口 /usr/local/bin/mihomo 已保留，可再次执行 mihomo 重新安装。'
+  echo '如需彻底删除全局入口，请手动执行：rm -rf /usr/local/bin/mihomo'
 }
 
 main() {
