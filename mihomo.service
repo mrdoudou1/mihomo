@@ -8,10 +8,10 @@ Wants=network-online.target
 Type=simple
 User=root
 Group=root
-WorkingDirectory=/opt/mihomo
+WorkingDirectory=/opt/mihomo1
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStartPre=/opt/mihomo/generate-config.sh
-ExecStart=/opt/mihomo/mihomo -d /opt/mihomo/config
+ExecStartPre=/opt/mihomo1/generate-config.sh
+ExecStart=/opt/mihomo1/mihomo -d /opt/mihomo1/config
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s

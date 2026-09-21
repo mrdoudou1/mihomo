@@ -5,9 +5,9 @@
 ## 安装
 
 ```bash
-sudo mkdir -p /opt/mihomo
-sudo cp -a . /opt/mihomo/
-cd /opt/mihomo
+sudo mkdir -p /opt/mihomo1
+sudo cp -a . /opt/mihomo1/
+cd /opt/mihomo1
 cp .env.example .env
 # 仅在本机编辑 .env，填写订阅地址和密钥；不要提交 .env
 chmod +x generate-config.sh service.sh bin/linux-amd64/mihomo bin/linux-arm64/mihomo
@@ -15,7 +15,7 @@ sudo ./service.sh install
 sudo ./service.sh start
 ```
 
-`service.sh install` 会安全地根据 `uname -m` 创建 `/opt/mihomo/mihomo` 软链接并安装 systemd 服务：`x86_64` 使用 `bin/x86_64/mihomo`，`amd64` 使用 `bin/amd64/mihomo`，`aarch64` 使用 `bin/aarch64/mihomo`，`arm64` 使用 `bin/arm64/mihomo`；未知架构会直接报错。若 `/opt/mihomo/mihomo` 已是普通文件，脚本不会覆盖它。首次启动会由脚本生成 `config/config.yaml` 并拉取订阅。
+`service.sh install` 会安全地根据 `uname -m` 创建 `/opt/mihomo1/mihomo` 软链接并安装 systemd 服务：`x86_64` 使用 `bin/x86_64/mihomo`，`amd64` 使用 `bin/amd64/mihomo`，`aarch64` 使用 `bin/aarch64/mihomo`，`arm64` 使用 `bin/arm64/mihomo`；未知架构会直接报错。若 `/opt/mihomo1/mihomo` 已是普通文件，脚本不会覆盖它。首次启动会由脚本生成 `config/config.yaml` 并拉取订阅。
 
 ## 二进制目录
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -Eeuo pipefail
 
-APP_DIR="/opt/mihomo"
+APP_DIR="/opt/mihomo1"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 ENV_FILE="$APP_DIR/.env"
 SERVICE_NAME="mihomo.service"
@@ -109,7 +109,7 @@ Mihomo 统一管理脚本（systemd + 终端代理）
   $0 test            测试 Mihomo 代理连通性
 
 提示：on/off/proxy 必须使用 source，才能修改当前终端的环境变量。
-      旧的 /opt/mihomo/proxy.sh 仍保留为兼容入口。
+      旧的 /opt/mihomo1/proxy.sh 仍保留为兼容入口。
 EOF
 }
 
