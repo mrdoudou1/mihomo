@@ -33,6 +33,7 @@ WEB_SECRET="${WEB_SECRET:-}"
 PROXY_USERNAME="${PROXY_USERNAME:-}"
 PROXY_PASSWORD="${PROXY_PASSWORD:-}"
 SUBSCRIBE_URLS="${SUBSCRIBE_URLS:-}"
+SUBSCRIBE_NAMES="${SUBSCRIBE_NAMES:-}"
 SUBSCRIBE_INTERVAL="${SUBSCRIBE_INTERVAL:-3600}"
 HEALTH_CHECK_URL="${HEALTH_CHECK_URL:-http://www.gstatic.com/generate_204}"
 HEALTH_CHECK_INTERVAL="${HEALTH_CHECK_INTERVAL:-300}"
@@ -47,7 +48,7 @@ TMP_FILE="$(mktemp "$CONFIG_DIR/.config.XXXXXX")"
 trap 'rm -f -- "$TMP_FILE"' EXIT
 yaml_quote() {
   local value="$1"
-  value="${value//\'/\'\'}"
+  value="$(printf '%s' "$value" | sed "s/'/''/g")"
   printf "'%s'" "$value"
 }
 if [ -z "$WEB_SECRET" ] || [ "$WEB_SECRET" = CHANGE_ME_WEB_SECRET ]; then
@@ -56,13 +57,28 @@ if [ -z "$WEB_SECRET" ] || [ "$WEB_SECRET" = CHANGE_ME_WEB_SECRET ]; then
 fi
 
 providers=()
+subscription_groups=()
+mapfile -t raw_names < <(printf '%s\n' "$SUBSCRIBE_NAMES" | tr ',' '\n')
+subscription_index=0
 if [ -n "$SUBSCRIBE_URLS" ]; then
   mapfile -t raw_urls < <(printf '%s\n' "$SUBSCRIBE_URLS" | tr ',' '\n')
   for raw_url in "${raw_urls[@]}"; do
+    label="${raw_names[$subscription_index]:-}"
+    subscription_index=$((subscription_index + 1))
     url="$(echo "$raw_url" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     [ -n "$url" ] || continue
     name="sub_$(printf '%s' "$url" | md5sum | cut -c1-8)"
+    # Repeated URLs share one provider and one subscription group.
+    duplicate=false
+    for item in ${providers[@]+"${providers[@]}"}; do
+      [ "${item%%|*}" != "$name" ] || duplicate=true
+    done
+    [ "$duplicate" = false ] || continue
     providers+=("$name|$url")
+    label="$(printf '%s' "$label" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    group="📦 订阅 ${subscription_index}"
+    [ -z "$label" ] || group="$group · $label"
+    subscription_groups+=("$group")
   done
 fi
 
@@ -98,6 +114,9 @@ fi
   echo "      - DIRECT"
   echo "      - ♻️ 自动选择"
   echo "      - 🚀 手动选择"
+  for group in ${subscription_groups[@]+"${subscription_groups[@]}"}; do
+    printf '      - %s\n' "$(yaml_quote "$group")"
+  done
   echo
   echo "  - name: ♻️ 自动选择"
   echo "    type: url-test"
@@ -127,6 +146,14 @@ fi
   echo "      - DIRECT"
   echo
   if [ ${#providers[@]} -gt 0 ]; then
+    for index in "${!providers[@]}"; do
+      item="${providers[$index]}"
+      printf '  - name: %s\n' "$(yaml_quote "${subscription_groups[$index]}")"
+      echo "    type: select"
+      echo "    use:"
+      echo "      - ${item%%|*}"
+      echo
+    done
     echo "proxy-providers:"
     for item in "${providers[@]}"; do
       name="${item%%|*}"
