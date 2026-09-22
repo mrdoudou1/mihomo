@@ -1,5 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
+umask 077
 
 APP_DIR="/opt/mihomo"
 ENV_FILE="$APP_DIR/.env"
@@ -14,7 +15,11 @@ source "$ENV_FILE"
 
 CONFIG_DIR="${CONFIG_DIR:-$APP_DIR/config}"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
-TMP_FILE="$CONFIG_FILE.tmp"
+if [ -f "$CONFIG_FILE" ] && [ "${1:-}" != --force ]; then
+  chmod 0600 "$CONFIG_FILE"
+  echo "保留现有配置: $CONFIG_FILE（菜单 5 可重新生成）"
+  exit 0
+fi
 
 HTTP_PORT="${HTTP_PORT:-7890}"
 SOCKS_PORT="${SOCKS_PORT:-7891}"
@@ -38,6 +43,17 @@ if [ "$BIND_ADDRESS" = "*" ]; then
 fi
 
 mkdir -p "$CONFIG_DIR"
+TMP_FILE="$(mktemp "$CONFIG_DIR/.config.XXXXXX")"
+trap 'rm -f -- "$TMP_FILE"' EXIT
+yaml_quote() {
+  local value="$1"
+  value="${value//\'/\'\'}"
+  printf "'%s'" "$value"
+}
+if [ -z "$WEB_SECRET" ] || [ "$WEB_SECRET" = CHANGE_ME_WEB_SECRET ]; then
+  echo '错误: 请在 .env 中设置自己的 WEB_SECRET 后生成配置。' >&2
+  exit 1
+fi
 
 providers=()
 if [ -n "$SUBSCRIBE_URLS" ]; then
@@ -56,13 +72,14 @@ fi
   echo "allow-lan: ${ALLOW_LAN}"
   echo "bind-address: \"${BIND_ADDRESS}\""
   echo "external-controller: ${EXTERNAL_CONTROLLER}"
+  printf 'secret: %s\n' "$(yaml_quote "$WEB_SECRET")"
   echo "external-ui: ./ui"
   echo "log-level: ${LOG_LEVEL}"
   echo "ipv6: ${IPV6}"
   echo "mode: ${MODE}"
   if [ -n "$PROXY_USERNAME" ] && [ -n "$PROXY_PASSWORD" ]; then
     echo "authentication:"
-    echo "  - \"${PROXY_USERNAME}:${PROXY_PASSWORD}\""
+    printf '  - %s\n' "$(yaml_quote "${PROXY_USERNAME}:${PROXY_PASSWORD}")"
   fi
   echo
   echo "proxies: []"
@@ -84,7 +101,7 @@ fi
   echo
   echo "  - name: ♻️ 自动选择"
   echo "    type: url-test"
-  echo "    url: '${HEALTH_CHECK_URL}'"
+    printf '    url: %s\n' "$(yaml_quote "$HEALTH_CHECK_URL")"
   echo "    interval: ${HEALTH_CHECK_INTERVAL}"
   if [ ${#providers[@]} -gt 0 ]; then
     echo "    use:"
@@ -117,7 +134,7 @@ fi
       cat <<EOF
   ${name}:
     type: http
-    url: "${url}"
+    url: $(yaml_quote "$url")
     interval: ${SUBSCRIBE_INTERVAL}
     path: ./${name}.yaml
     health-check:
@@ -129,6 +146,18 @@ EOF
   fi
 } > "$TMP_FILE"
 
+if [ -x "$APP_DIR/mihomo" ]; then
+  "$APP_DIR/mihomo" -t -d "$CONFIG_DIR" -f "$TMP_FILE" >/dev/null 2>&1 || {
+    echo '配置校验失败，原配置已保留。请检查 .env。' >&2
+    exit 1
+  }
+fi
+if [ -f "$CONFIG_FILE" ]; then
+  backup_file="$CONFIG_FILE.backup.$(date +%s)"
+  cp -p "$CONFIG_FILE" "$backup_file"
+  chmod 0600 "$backup_file"
+fi
+chmod 0600 "$TMP_FILE"
 mv "$TMP_FILE" "$CONFIG_FILE"
 
 echo "配置文件已生成: $CONFIG_FILE"

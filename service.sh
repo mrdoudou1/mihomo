@@ -204,6 +204,8 @@ prepare_service_command() {
           install -m 0600 "$APP_DIR/.env.example" "$ENV_FILE" || return
           log '已创建 .env，请填写订阅和认证信息后启动服务。'
         fi
+        chmod 0600 "$ENV_FILE" || return
+        [ ! -f "$DEFAULT_CONFIG_DIR/config.yaml" ] || chmod 0600 "$DEFAULT_CONFIG_DIR/config.yaml" || return
       fi
       migrate_legacy_config_path || return
       ensure_arch_binary || return
@@ -224,8 +226,8 @@ Mihomo 统一管理脚本（systemd + 终端代理）
 
 服务管理:
   $0 install    按 CPU 架构创建 mihomo 软链接并安装 systemd 服务
-  $0 start      生成配置、清理订阅缓存并启动
-  $0 restart    生成配置、保留订阅缓存并重启
+  $0 start      保留配置与缓存并启动，首次自动生成配置
+  $0 restart    保留配置与缓存并重启
   $0 reload     重新加载配置（等同 restart）
   $0 update     清理订阅缓存、生成配置并重启
   $0 upgrade    通过 Mihomo 代理直接下载并在线更新项目
@@ -255,7 +257,7 @@ show_runtime_summary() {
   boot_state="$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
   [ -n "$service_state" ] || service_state='未安装'
   [ -n "$boot_state" ] || boot_state='未启用'
-  if [ -n "${http_proxy:-}" ] || [ -n "${HTTP_PROXY:-}" ]; then proxy_state='已开启'; else proxy_state='未开启'; fi
+  if proxy_env_set; then proxy_state='已设置（不代表连通）'; else proxy_state='未开启'; fi
   controller='127.0.0.1:9090'
   if [ -f "$CONFIG_DIR/config.yaml" ]; then
     controller="$(sed -nE 's/^[[:space:]]*external-controller:[[:space:]]*([^[:space:]#]+).*/\1/p' "$CONFIG_DIR/config.yaml" | head -n 1 | tr -d '\"')"
@@ -278,7 +280,7 @@ show_runtime_summary() {
     enabled|enabled-runtime) printf '    开机自启: %b%s%b' "$GREEN" '已开启' "$NC" ;;
     *) printf '    开机自启: %b%s%b' "$YELLOW" "$boot_state" "$NC" ;;
   esac
-  if [ "$proxy_state" = '已开启' ]; then
+  if proxy_env_set; then
     printf '    终端代理: %b%s%b\n' "$GREEN" "$proxy_state" "$NC"
   else
     printf '    终端代理: %b%s%b\n' "$RED" "$proxy_state" "$NC"
@@ -377,13 +379,13 @@ generate_config() {
     echo "[mihomo-service] ERROR: generate-config.sh 不存在或不可执行" >&2
     return 1
   }
-  "$APP_DIR/generate-config.sh"
+  "$APP_DIR/generate-config.sh" "$@"
 }
 
 prepare_config() {
   load_env || return
   mkdir -p "$CONFIG_DIR" || return
-  generate_config
+  generate_config "$@"
 }
 
 proxy_on() {
@@ -406,11 +408,12 @@ proxy_off() {
 }
 
 proxy_status() {
-  if [ -n "${http_proxy:-}" ] || [ -n "${HTTP_PROXY:-}" ]; then
-    echo -e "${GREEN}✅ 当前终端代理已开启${NC}"
-    echo "HTTP_PROXY : ${HTTP_PROXY:-未设置}"
-    echo "HTTPS_PROXY: ${HTTPS_PROXY:-未设置}"
-    echo "ALL_PROXY  : ${ALL_PROXY:-未设置}"
+  if proxy_env_set; then
+    echo -e "${GREEN}✅ 当前终端代理变量已设置（不代表连通）${NC}"
+    local name
+    for name in http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY; do
+      [ -z "${!name:-}" ] || printf '%s: 已设置（隐藏认证信息）\n' "$name"
+    done
   else
     echo -e "${RED}❌ 当前终端代理未开启${NC}"
     echo "如需开启，请执行：source $SCRIPT_PATH on"
@@ -418,120 +421,186 @@ proxy_status() {
 }
 
 proxy_test() {
+  local failed=0
   load_env || return
   build_proxy_urls
   echo "以下测试显式使用 Mihomo 代理，不检查当前终端或 Git 的代理设置。"
   echo -n "测试 HTTP 代理连通性... "
-  if curl -sS --connect-timeout 5 -x "$HTTP_PROXY_URL" http://www.gstatic.com/generate_204 >/dev/null 2>&1; then
+  if curl -fsS --noproxy '' --max-time 20 --connect-timeout 5 -x "$HTTP_PROXY_URL" http://www.gstatic.com/generate_204 >/dev/null 2>&1; then
     echo -e "${GREEN}✅ 正常${NC}"
   else
+    failed=1
     echo -e "${RED}❌ 失败${NC}"
   fi
 
   echo -n "测试外网访问能力... "
-  if curl -sS --connect-timeout 5 -x "$HTTP_PROXY_URL" https://www.google.com >/dev/null 2>&1; then
+  if curl -fsS --noproxy '' --max-time 20 --connect-timeout 5 -x "$HTTP_PROXY_URL" https://www.google.com >/dev/null 2>&1; then
     echo -e "${GREEN}✅ 正常${NC}"
   else
+    failed=1
     echo -e "${RED}❌ 失败${NC}"
   fi
 
   echo -n "获取当前出口 IP... "
   local ip
-  ip="$(curl -sS --connect-timeout 5 -x "$HTTP_PROXY_URL" https://api.ip.sb/ip 2>/dev/null || true)"
+  ip="$(curl -fsS --noproxy '' --max-time 20 --connect-timeout 5 -x "$HTTP_PROXY_URL" https://api.ip.sb/ip 2>/dev/null || true)"
   if [ -n "$ip" ]; then
     echo -e "${GREEN}${ip}${NC}"
   else
+    failed=1
     echo -e "${YELLOW}获取失败${NC}"
   fi
+  return "$failed"
 }
 
-is_preserved_entry() {
-  case "$1" in
-    .env|.env.backup.*|proxy.sh|config|.git) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-copy_program_entries() {
-  local source="$1" destination="$2" entry name
-  for entry in "$source"/* "$source"/.[!.]* "$source"/..?*; do
-    [ -e "$entry" ] || [ -L "$entry" ] || continue
-    name="${entry##*/}"
-    is_preserved_entry "$name" && continue
-    cp -a "$entry" "$destination/$name" || return
-  done
-}
-
-remove_program_entries() {
-  local entry name
-  for entry in "$APP_DIR"/* "$APP_DIR"/.[!.]* "$APP_DIR"/..?*; do
-    [ -e "$entry" ] || [ -L "$entry" ] || continue
-    name="${entry##*/}"
-    is_preserved_entry "$name" && continue
-    rm -rf -- "$entry" || return
-  done
-}
-
-restore_program_backup() {
-  local backup_dir="$1"
-  remove_program_entries || return
-  copy_program_entries "$backup_dir" "$APP_DIR"
-}
-
-upgrade_project() {
-  local stage archive source_dir backup_dir
+wait_service_ready() {
+  local attempt stable=0 pid='' previous='' port
   load_env || return
-  build_proxy_urls
-  command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1 || {
-    echo '[mihomo-service] ERROR: 在线更新需要 curl 和 tar 命令' >&2
-    return 1
-  }
-  stage="$(mktemp -d /tmp/mihomo-upgrade.XXXXXX)" || return
-  archive="$stage/mihomo.tar.gz"
-  backup_dir="$stage/backup"
-  mkdir -p "$backup_dir" || { rm -rf -- "$stage"; return 1; }
-  log '正在通过 Mihomo 代理下载 GitHub 最新版本...'
-  if ! curl -fL --progress-bar --connect-timeout 10 --max-time 300 -x "$HTTP_PROXY_URL" \
-       -o "$archive" https://github.com/mrdoudou1/mihomo/archive/refs/heads/main.tar.gz; then
-    rm -rf -- "$stage"
-    echo '[mihomo-service] ERROR: 下载失败，现有程序未改动。' >&2
-    return 1
-  fi
-  if ! tar -tzf "$archive" >/dev/null 2>&1 || ! tar -xzf "$archive" -C "$stage"; then
-    rm -rf -- "$stage"
-    echo '[mihomo-service] ERROR: 下载文件无效，现有程序未改动。' >&2
-    return 1
-  fi
-  source_dir="$(find "$stage" -mindepth 1 -maxdepth 1 -type d -name 'mihomo-*' | head -n 1)"
-  if [ -z "$source_dir" ] || ! bash -n "$source_dir/service.sh"; then
-    rm -rf -- "$stage"
-    echo '[mihomo-service] ERROR: 新版本脚本校验失败，现有程序未改动。' >&2
-    return 1
-  fi
-  copy_program_entries "$APP_DIR" "$backup_dir" || { rm -rf -- "$stage"; return 1; }
-  if ! remove_program_entries || ! copy_program_entries "$source_dir" "$APP_DIR"; then
-    restore_program_backup "$backup_dir" || true
-    rm -rf -- "$stage"
-    echo '[mihomo-service] ERROR: 替换失败，已恢复旧程序。' >&2
-    return 1
-  fi
-  if ! bash "$APP_DIR/service.sh" install || ! bash "$APP_DIR/service.sh" restart; then
-    restore_program_backup "$backup_dir" || true
-    bash "$APP_DIR/service.sh" install >/dev/null 2>&1 || true
-    bash "$APP_DIR/service.sh" restart >/dev/null 2>&1 || true
-    rm -rf -- "$stage"
-    echo '[mihomo-service] ERROR: 新版本启动失败，已恢复旧程序。' >&2
-    return 1
-  fi
-  rm -rf -- "$stage"
-  log '在线更新完成；.env、proxy.sh、config 和 .git 已保留。'
+  for attempt in {1..15}; do
+    pid="$(systemctl show "$SERVICE_NAME" -p MainPID 2>/dev/null)"
+    if systemctl is-active --quiet "$SERVICE_NAME" && [ "$pid" != MainPID=0 ]; then
+      local ready=1
+      for port in "$HTTP_PORT" "$SOCKS_PORT"; do
+        timeout 2 bash -c 'exec 3<>/dev/tcp/127.0.0.1/"$1"' _ "$port" 2>/dev/null || ready=0
+      done
+      if [ "$ready" = 1 ] && [ "$pid" = "$previous" ]; then
+        stable=$((stable + 1))
+        [ "$stable" -lt 3 ] || { log '服务运行稳定，HTTP/SOCKS 端口检查通过。'; return 0; }
+      else
+        stable=0
+      fi
+    else
+      stable=0
+    fi
+    previous="$pid"
+    sleep 1
+  done
+  echo '服务健康检查失败，请查看最近日志。' >&2
+  return 1
 }
+
+download_update() {
+  local output="$1" url='https://github.com/mrdoudou1/mihomo/archive/refs/heads/main.tar.gz'
+  local opts=(-fL --progress-bar --connect-timeout 5 --max-time 180 -o "$output")
+  if proxy_env_set; then
+    log '尝试当前终端的代理下载…'
+    curl "${opts[@]}" "$url" && return 0
+  fi
+  if systemctl is-active --quiet "$SERVICE_NAME"; then
+    log '尝试本机 Mihomo 代理下载…'
+    curl "${opts[@]}" --noproxy '' -x "$HTTP_PROXY_URL" "$url" && return 0
+  fi
+  log '尝试直接连接 GitHub…'
+  curl "${opts[@]}" --noproxy '*' "$url"
+}
+
+# Replace individual files atomically. Unknown local files are never removed.
+atomic_program_copy() {
+  local source="$1" target="$2" temp
+  temp="$(mktemp "${target}.new.XXXXXX")" || return
+  if cp -p -- "$source" "$temp" && mv -f -- "$temp" "$target"; then return 0; fi
+  rm -f -- "$temp"
+  return 1
+}
+
+rollback_upgrade() {
+  local file ok=0
+  systemctl stop "$SERVICE_NAME" || return 1
+  for file in "${program_files[@]}"; do
+    if [ -f "$backup_dir/$file" ]; then
+      atomic_program_copy "$backup_dir/$file" "$APP_DIR/$file" || ok=1
+    elif [ -f "$backup_dir/absent/${file//\//_}" ]; then
+      rm -f -- "$APP_DIR/$file" || ok=1
+    fi
+  done
+  [ ! -f "$backup_dir/unit" ] || atomic_program_copy "$backup_dir/unit" "$SYSTEMD_UNIT" || ok=1
+  [ ! -f "$backup_dir/entry" ] || atomic_program_copy "$backup_dir/entry" "$COMMAND_ENTRY" || ok=1
+  [ ! -f "$backup_dir/config.yaml" ] || atomic_program_copy "$backup_dir/config.yaml" "$CONFIG_DIR/config.yaml" || ok=1
+  [ ! -f "$backup_dir/env" ] || atomic_program_copy "$backup_dir/env" "$ENV_FILE" || ok=1
+  systemctl daemon-reload || ok=1
+  if [ "$was_active" = 1 ]; then
+    systemctl start "$SERVICE_NAME" && wait_service_ready || ok=1
+  fi
+  return "$ok"
+}
+
+upgrade_project() (
+  set -Eeuo pipefail
+  [ "$(id -u)" -eq 0 ] || { echo '升级需要 root 权限。' >&2; exit 1; }
+  [ "$APP_DIR" = /opt/mihomo ] && [ ! -L "$APP_DIR" ] \
+    && [ "$(readlink -f "$APP_DIR")" = "$APP_DIR" ] || exit 1
+  local tool stage archive source_dir backup_dir file was_active=0 changed=0 completed=0
+  local program_files=(service.sh generate-config.sh install.sh README.md .env.example .gitignore bin/linux-amd64/mihomo bin/linux-arm64/mihomo)
+  for tool in curl tar flock timeout; do command -v "$tool" >/dev/null || { echo "缺少命令: $tool" >&2; exit 1; }; done
+  exec 9>/run/lock/mihomo-maintenance.lock
+  flock -n 9 || { echo '另一个升级或卸载操作正在进行，请稍后重试。' >&2; exit 1; }
+  load_env
+  build_proxy_urls
+  stage="$(mktemp -d /var/tmp/mihomo-upgrade.XXXXXX)"
+  backup_dir="$stage/backup"
+  archive="$stage/mihomo.tar.gz"
+  mkdir -p "$backup_dir/absent" "$stage/unpack"
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
+  trap '
+    code=$?
+    trap - EXIT INT TERM HUP
+    if [ "$changed" = 1 ] && [ "$completed" = 0 ]; then
+      if rollback_upgrade; then
+        echo "升级未完成，旧程序已恢复。备份保留在: $backup_dir" >&2
+      else
+        echo "回滚未成功，请勿删除备份: $backup_dir" >&2
+      fi
+    elif [ "$completed" = 0 ]; then
+      echo "升级未开始替换程序。诊断文件保留在: $stage" >&2
+    fi
+    exit "$code"
+  ' EXIT
+  download_update "$archive"
+  tar -tzf "$archive" > "$stage/entries"
+  # Reject paths outside the one known archive root before extraction.
+  awk '$0 !~ /^mihomo-main\// || $0 ~ /(^|\/)\.\.(\/|$)/ {bad=1} END {exit bad}' "$stage/entries"
+  tar -tvzf "$archive" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {bad=1} END {exit bad}'
+  tar -xzf "$archive" --no-same-owner -C "$stage/unpack"
+  source_dir="$stage/unpack/mihomo-main"
+  for file in "${program_files[@]}"; do
+    [ -f "$source_dir/$file" ] && [ ! -L "$source_dir/$file" ] || exit 1
+    [ ! -L "$APP_DIR/$file" ] || { echo "拒绝覆盖软链接: $file" >&2; exit 1; }
+  done
+  [ ! -L "$APP_DIR/bin" ] && [ ! -L "$APP_DIR/bin/linux-amd64" ] && [ ! -L "$APP_DIR/bin/linux-arm64" ] || exit 1
+  for file in service.sh generate-config.sh install.sh; do bash -n "$source_dir/$file"; done
+  case "$(uname -m)" in x86_64|amd64) file=bin/linux-amd64/mihomo;; aarch64|arm64) file=bin/linux-arm64/mihomo;; *) exit 1;; esac
+  chmod +x "$source_dir/$file"
+  "$source_dir/$file" -t -d "$CONFIG_DIR" -f "$CONFIG_DIR/config.yaml" > "$stage/config-check.log" 2>&1
+  for file in "${program_files[@]}"; do
+    mkdir -p "$backup_dir/$(dirname "$file")"
+    if [ -f "$APP_DIR/$file" ]; then cp -p "$APP_DIR/$file" "$backup_dir/$file"; else touch "$backup_dir/absent/${file//\//_}"; fi
+  done
+  [ ! -f "$SYSTEMD_UNIT" ] || cp -p "$SYSTEMD_UNIT" "$backup_dir/unit"
+  [ ! -f "$COMMAND_ENTRY" ] || cp -p "$COMMAND_ENTRY" "$backup_dir/entry"
+  cp -p "$CONFIG_DIR/config.yaml" "$backup_dir/config.yaml"
+  cp -p "$ENV_FILE" "$backup_dir/env"
+  systemctl is-active --quiet "$SERVICE_NAME" && was_active=1
+  changed=1
+  systemctl stop "$SERVICE_NAME"
+  for file in "${program_files[@]}"; do
+    mkdir -p "$APP_DIR/$(dirname "$file")"
+    atomic_program_copy "$source_dir/$file" "$APP_DIR/$file"
+  done
+  bash "$APP_DIR/service.sh" install
+  if [ "$was_active" = 1 ]; then systemctl start "$SERVICE_NAME"; wait_service_ready; fi
+  completed=1
+  log "升级完成；配置与 proxy.sh 已保留。旧程序备份: $backup_dir"
+  [ "$was_active" = 1 ] || log '服务原本未运行，升级后仍保持停止。'
+)
 
 uninstall_service() {
   if [ "$(id -u)" -ne 0 ]; then
     echo "[mihomo-service] ERROR: 卸载 systemd 服务需要 root 权限" >&2
     return 1
   fi
+  exec 9>/run/lock/mihomo-maintenance.lock
+  flock -n 9 || { echo '另一个升级或卸载操作正在进行。' >&2; return 1; }
   echo '卸载前请在当前终端执行：source /opt/mihomo/service.sh off'
   if proxy_env_set; then
     echo '检测到代理环境变量，已取消卸载。关闭代理后重试。' >&2
@@ -581,20 +650,18 @@ case "${1:-}" in
     ;;
   start)
     prepare_config || return
-    find "$CONFIG_DIR" -maxdepth 1 -type f -name 'sub_*.yaml' -delete
-    log "已生成配置并清理订阅缓存，交由 systemd 启动"
-    systemctl start "$SERVICE_NAME"
+    systemctl start "$SERVICE_NAME" && wait_service_ready
     ;;
   restart|reload)
     prepare_config || return
-    log "已生成配置，保留订阅缓存，交由 systemd 重启"
-    systemctl restart "$SERVICE_NAME"
+    log "保留已有配置及订阅缓存，交由 systemd 重启"
+    systemctl restart "$SERVICE_NAME" && wait_service_ready
     ;;
   update)
-    prepare_config || return
+    prepare_config --force || return
     find "$CONFIG_DIR" -maxdepth 1 -type f -name 'sub_*.yaml' -delete
     log "已清理订阅缓存，交由 systemd 重启并重新拉取订阅"
-    systemctl restart "$SERVICE_NAME"
+    systemctl restart "$SERVICE_NAME" && wait_service_ready
     ;;
   upgrade)
     upgrade_project
@@ -603,7 +670,13 @@ case "${1:-}" in
     systemctl stop "$SERVICE_NAME"
     ;;
   status)
-    systemctl status "$SERVICE_NAME" --no-pager -l
+    local status_code=0
+    systemctl status "$SERVICE_NAME" --no-pager -l || status_code=$?
+    case "$status_code" in
+      0) return 0;;
+      3) echo '状态查询完成：服务未运行或处于失败状态。'; return 0;;
+      *) return "$status_code";;
+    esac
     ;;
   logs)
     journalctl -u "$SERVICE_NAME" -n 100 --no-pager -o short-iso

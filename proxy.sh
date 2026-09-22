@@ -52,29 +52,34 @@ proxy_status() {
 }
 
 proxy_test() {
+  local failed=0
   build_proxy_urls
   echo -n "测试 HTTP 代理连通性... "
-  if curl -sS --connect-timeout 5 -x "$HTTP_PROXY_URL" http://www.gstatic.com/generate_204 >/dev/null 2>&1; then
+  if curl -fsS --noproxy '' --max-time 20 --connect-timeout 5 -x "$HTTP_PROXY_URL" http://www.gstatic.com/generate_204 >/dev/null 2>&1; then
     echo -e "${GREEN}正常${NC}"
   else
+    failed=1
     echo -e "${RED}失败${NC}"
   fi
 
   echo -n "测试外网访问能力... "
-  if curl -sS --connect-timeout 5 -x "$HTTP_PROXY_URL" https://www.google.com >/dev/null 2>&1; then
+  if curl -fsS --noproxy '' --max-time 20 --connect-timeout 5 -x "$HTTP_PROXY_URL" https://www.google.com >/dev/null 2>&1; then
     echo -e "${GREEN}正常${NC}"
   else
+    failed=1
     echo -e "${RED}失败${NC}"
   fi
 
   echo -n "获取当前出口 IP... "
   local ip
-  ip="$(curl -sS --connect-timeout 5 -x "$HTTP_PROXY_URL" https://api.ip.sb/ip 2>/dev/null || true)"
+  ip="$(curl -fsS --noproxy '' --max-time 20 --connect-timeout 5 -x "$HTTP_PROXY_URL" https://api.ip.sb/ip 2>/dev/null || true)"
   if [ -n "$ip" ]; then
     echo -e "${GREEN}${ip}${NC}"
   else
+    failed=1
     echo -e "${YELLOW}获取失败${NC}"
   fi
+  return "$failed"
 }
 
 show_help() {
