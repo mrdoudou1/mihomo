@@ -103,20 +103,10 @@ fi
   echo "proxy-groups:"
   echo "  - name: 🎯 选择节点"
   echo "    type: select"
-  if [ ${#providers[@]} -gt 0 ]; then
-    echo "    use:"
-    for item in "${providers[@]}"; do
-      name="${item%%|*}"
-      echo "      - ${name}"
-    done
-  fi
   echo "    proxies:"
   echo "      - DIRECT"
   echo "      - ♻️ 自动选择"
   echo "      - 🚀 手动选择"
-  for group in ${subscription_groups[@]+"${subscription_groups[@]}"}; do
-    printf '      - %s\n' "$(yaml_quote "$group")"
-  done
   echo
   echo "  - name: ♻️ 自动选择"
   echo "    type: url-test"
@@ -135,15 +125,14 @@ fi
   echo
   echo "  - name: 🚀 手动选择"
   echo "    type: select"
-  if [ ${#providers[@]} -gt 0 ]; then
-    echo "    use:"
-    for item in "${providers[@]}"; do
-      name="${item%%|*}"
-      echo "      - ${name}"
-    done
-  fi
   echo "    proxies:"
-  echo "      - DIRECT"
+  if [ ${#providers[@]} -gt 0 ]; then
+    for group in "${subscription_groups[@]}"; do
+      printf '      - %s\n' "$(yaml_quote "$group")"
+    done
+  else
+    echo "      - DIRECT"
+  fi
   echo
   if [ ${#providers[@]} -gt 0 ]; then
     for index in "${!providers[@]}"; do
@@ -155,7 +144,8 @@ fi
       echo
     done
     echo "proxy-providers:"
-    for item in "${providers[@]}"; do
+    for index in "${!providers[@]}"; do
+      item="${providers[$index]}"
       name="${item%%|*}"
       url="${item#*|}"
       cat <<EOF
@@ -164,6 +154,8 @@ fi
     url: $(yaml_quote "$url")
     interval: ${SUBSCRIBE_INTERVAL}
     path: ./${name}.yaml
+    override:
+      additional-prefix: $(yaml_quote "[${subscription_groups[$index]#📦 }] ")
     health-check:
       enable: true
       url: ${HEALTH_CHECK_URL}
